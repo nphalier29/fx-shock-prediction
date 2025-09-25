@@ -35,10 +35,10 @@ eur_usd["seuil_haut"] = 2 * eur_usd["vol"]
 eur_usd["seuil_bas"] = -2 * eur_usd["vol"]
 
 # Variable cible : 1 si choc (hausse ou baisse), 0 sinon
-eur_usd["cible"] = eur_usd.apply(
-    lambda row: 1 if (row["rendement_10j"] > row["seuil_haut"]) or (row["rendement_10j"] < row["seuil_bas"]) else 0,
-    axis=1
-)
+eur_usd["target"] = ((eur_usd["taux_croissance"] >= eur_usd["seuil_haut"]) | (eur_usd["taux_croissance"] <= eur_usd["seuil_bas"])).astype(int)
+
+eur_usd[["taux_croissance", "vol", "target"]].tail(10)
+
 
 # --- Indicateurs chartistes pour visualisation ---
 
@@ -51,7 +51,7 @@ eur_usd["bollinger_moyenne"] = eur_usd["eur_usd"].rolling(window=20).mean()
 eur_usd["bollinger_haut"] = eur_usd["bollinger_moyenne"] + 2 * eur_usd["eur_usd"].rolling(window=20).std()
 eur_usd["bollinger_bas"] = eur_usd["bollinger_moyenne"] - 2 * eur_usd["eur_usd"].rolling(window=20).std()
 
-print(eur_usd.head())
+print(eur_usd.tail())
 
 
 # RSI (Relative Strength Index)
@@ -64,6 +64,9 @@ def calculer_rsi(series, window=14):
     return rsi
 
 eur_usd["rsi_14j"] = calculer_rsi(eur_usd["eur_usd"])
+
+print(eur_usd.tail())
+
 
 # --- Indicateur de sentiment ---
 from gdeltdoc import GdeltDoc, Filters
@@ -140,76 +143,31 @@ def recuperer_tous_articles_gdelt(start_date, end_date, keyword="EUR/USD", langu
     df['sentiment'] = df['title'].apply(calculer_sentiment)
 
     return df
-    print(df.head())
 
 
-# --- Utilisation ---
-start_date = '2023-01-01'
-end_date = '2025-09-03'
+# --- Variables PCA ---
 
-# Récupérer tous les articles
-articles_df = recuperer_tous_articles_gdelt(start_date, end_date, keyword="EUR/USD")
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
 
-if not articles_df.empty:
-    # Calculer le sentiment moyen par jour
-    sentiment_quotidien = articles_df.groupby('date')['sentiment'].mean().reset_index()
+df = eur_usd.copy().dropna().reset_index()
 
-    # Fusionner avec ton DataFrame eur_usd
-    eur_usd_indexed = eur_usd.reset_index()
-    eur_usd_indexed['timestamp'] = pd.to_datetime(eur_usd_indexed['timestamp']).dt.normalize()
- # Normaliser la date
+X = df.select_dtypes(include=['float64','int64'])  # uniquement variables numériques
+X_scaled = StandardScaler().fit_transform(X)
 
-    eur_usd_with_sentiment = eur_usd_indexed.merge(
-       sentiment_quotidien,
-        on='timestamp',
-        how='left'
-    ).set_index('index')
 
-    eur_usd_with_sentiment.rename(columns={'sentiment': 'sentiment_vader'}, inplace=True)
-    eur_usd_with_sentiment['sentiment_vader'] = eur_usd_with_sentiment['sentiment_vader'].fillna(0)
+pca = PCA(n_components=0.9)  # garder assez de composantes pour expliquer 90% de la variance
+X_pca = pca.fit_transform(X_scaled)
 
-    # Mettre à jour ton DataFrame eur_usd
-    eur_usd = eur_usd_with_sentiment
+# Créer un DataFrame avec les nouvelles variables PCA
+df_pca = pd.DataFrame(X_pca, columns=[f'PC{i+1}' for i in range(X_pca.shape[1])])
 
-    # Afficher les dernières valeurs
-    print(eur_usd[['eur_usd', 'sentiment_vader']].tail(10))
+df_extended = pd.concat([df, df_pca], axis=1)
 
-# --- Variables exogènes économiques ---
 
-# def charger_serie(nom_colonne, url):
-#     """Charge une série via l'API TAC, la nettoie et renomme sa colonne"""
-#     df = taceconomics.getdata(url)
-#     if df is not None:
-#         df = df.dropna()
-#         df.columns = [nom_colonne]
-#         df.index = pd.to_datetime(df.index)
-#         return df
-#     else:
-#         print(f"Erreur : données non chargées pour {nom_colonne}")
-#         return None
+kmeans = KMeans(n_clusters=3, random_state=42)  # exemple avec 3 clusters
+df_extended['cluster_kmeans'] = kmeans.fit_predict(X_pca)
 
-# # Dictionnaire des séries exogènes à importer
-# series_info = {
-#     "infl_USA":   f"FRED/CPIAUCSL/USA?collapse=M&transform=growth_yoy&start_date={start_date}",
-#     "infl_EUZ":   f"EUROSTAT/EI_CPHI_M_CP-HI00_NSA_HICP2015/EUZ?collapse=M&transform=growth_yoy&start_date={start_date}",
-#     "prate_USA":  f"DS/USPRATE./WLD?collapse=M&start_date={start_date}",
-#     "prate_EUZ":  f"ECB/FM_D_EUR_4F_KR_DFR_LEV/EUZ?collapse=M&collapse_mode=end_of_period&start_date={start_date}",
-#     "bond10_USA": f"DS/TRUS10T_RY/WLD?collapse=M&start_date={start_date}",
-#     "bond10_EUZ": f"DS/TRBD10T_RY/WLD?collapse=M&start_date={start_date}",
-#     "tgdp_USA":   f"FRED/GDPC1/USA?collapse=M&transform=growth_yoy&start_date={start_date}",
-#     "tgdp_EUZ":   f"EUROSTAT/NAMQ_10_GDP_B1GQ_SCA_CLV15_MEUR/EUZ?collapse=M&transform=growth_yoy&start_date={start_date}"
-# }
 
-# # Chargement et fusion des séries dans une seule table
-# dataframes = []
-# for nom, url in series_info.items():
-#     df = charger_serie(nom, url)
-#     if df is not None:
-#         dataframes.append(df)
-
-# # Fusion de toutes les séries exogènes par date
-# df_exog = reduce(lambda left, right: pd.merge(left, right, left_index=True, right_index=True, how='outer'), dataframes)
-
-# # Fusion finale : taux de change + exogènes
-# df_final = pd.merge(eur_usd, df_exog, left_index=True, right_index=True, how='outer')
-# df_final = df_final.ffill().sort_index()  # Remplissage des valeurs manquantes et tri
+print(df_extended.tail(60))
