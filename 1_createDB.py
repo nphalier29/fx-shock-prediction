@@ -51,6 +51,9 @@ eur_usd["bollinger_moyenne"] = eur_usd["eur_usd"].rolling(window=20).mean()
 eur_usd["bollinger_haut"] = eur_usd["bollinger_moyenne"] + 2 * eur_usd["eur_usd"].rolling(window=20).std()
 eur_usd["bollinger_bas"] = eur_usd["bollinger_moyenne"] - 2 * eur_usd["eur_usd"].rolling(window=20).std()
 
+print(eur_usd.head())
+
+
 # RSI (Relative Strength Index)
 def calculer_rsi(series, window=14):
     delta = series.diff()
@@ -137,6 +140,8 @@ def recuperer_tous_articles_gdelt(start_date, end_date, keyword="EUR/USD", langu
     df['sentiment'] = df['title'].apply(calculer_sentiment)
 
     return df
+    print(df.head())
+
 
 # --- Utilisation ---
 start_date = '2023-01-01'
@@ -151,11 +156,12 @@ if not articles_df.empty:
 
     # Fusionner avec ton DataFrame eur_usd
     eur_usd_indexed = eur_usd.reset_index()
-    eur_usd_indexed['date'] = eur_usd_indexed['index'].normalize()  # Normaliser la date
+    eur_usd_indexed['timestamp'] = pd.to_datetime(eur_usd_indexed['timestamp']).dt.normalize()
+ # Normaliser la date
 
     eur_usd_with_sentiment = eur_usd_indexed.merge(
-        sentiment_quotidien,
-        on='date',
+       sentiment_quotidien,
+        on='timestamp',
         how='left'
     ).set_index('index')
 
