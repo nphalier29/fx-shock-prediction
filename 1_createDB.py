@@ -171,3 +171,291 @@ df_extended['cluster_kmeans'] = kmeans.fit_predict(X_pca)
 
 
 print(df_extended.tail(60))
+
+#----Variables macro----
+ # Inflation
+infl_eur = taceconomics.getdata(f"IFS/PCPIHA_IX_M/EUZ?start_date={start_date}")
+infl_us = taceconomics.getdata(f"IFS/PCPI_IX_M/USA?start_date={start_date}")
+df_final = df_extended.join(infl_eur).join(infl_us)
+
+
+
+ # Taux interets
+ti_eur = taceconomics.getdata(f"IFS/FPOLM_PA_M/EUZ?start_date={start_date}")
+ti_us = taceconomics.getdata(f"IFS/FPOLM_PA_M/USA?start_date={start_date}")
+df_final = df_final.join(ti_eur).join(ti_us)
+
+
+
+print(df_final.tail(40))
+
+
+# MODELISATION
+
+# xgb_single_model_timeseries.py
+"""
+XGBoost focalisé pour prédiction d'un choc à 2 semaines sur EUR/USD.
+Sorties :
+- AUC, Gini, courbe ROC (test),
+- seuil optimal (Youden) et matrice de confusion + métriques associées,
+- modèle final enregistré (joblib).
+
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import pandas as pd
+import numpy as np
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
+from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix, precision_score, recall_score, f1_score, accuracy_score, balanced_accuracy_score
+from xgboost import XGBClassifier
+import matplotlib.pyplot as plt
+import seaborn as sns
+import joblib
+from datetime import datetime
+
+# -----------------------
+# Config 
+# -----------------------
+RANDOM_STATE = 42
+# Fractions pour split contigu (doivent sommer à 1.0)
+TRAIN_FRAC = 0.70
+VAL_FRAC   = 0.15
+TEST_FRAC  = 0.15
+
+# TimeSeries CV splits (pour GridSearch)
+TS_SPLITS = 5
+
+# Grid search params 
+XGB_PARAM_GRID = {
+    'n_estimators': [100, 300],
+    'max_depth': [3, 5],
+    'learning_rate': [0.01, 0.05, 0.1],
+    'subsample': [0.8, 1.0],
+    'colsample_bytree': [0.6, 0.8, 1.0]
+}
+
+# Metric d'optimisation pour la recherche d'hyperparamètres (ici F1, tu peux changer en 'roc_auc')
+GRID_SCORING = 'f1'
+
+# Early stopping rounds pour re-entrainement final
+EARLY_STOPPING_ROUNDS = 50
+
+# Fichiers de sortie
+MODEL_OUTPATH = "xgb_final_model.joblib"
+IMPUTER_OUTPATH = "imputer.joblib"
+
+# -----------------------
+# Chargement & checks
+# -----------------------
+print("Chargement des données...")
+
+df = df_final.sort_values(DATE_COL).reset_index(drop=True)
+
+if DATE_COL not in df.columns:
+    raise ValueError(f"Colonne date '{DATE_COL}' introuvable.")
+if TARGET_COL not in df.columns:
+    raise ValueError(f"Colonne cible '{TARGET_COL}' introuvable.")
+
+# index temporel
+df.set_index(DATE_COL, inplace=True)
+
+# Features & target
+X = df.drop(columns=[TARGET_COL])
+y = df[TARGET_COL].astype(int)
+
+# On suppose tout numérique — sinon adapter types/catégoriques
+num_cols = X.columns.tolist()
+
+# -----------------------
+# Split contigu (train / val / test)
+# -----------------------
+n = len(df)
+if not abs(TRAIN_FRAC + VAL_FRAC + TEST_FRAC - 1.0) < 1e-8:
+    raise ValueError("TRAIN_FRAC + VAL_FRAC + TEST_FRAC doit être égal à 1.0")
+
+train_end = int(n * TRAIN_FRAC)
+val_end = train_end + int(n * VAL_FRAC)
+
+X_train = X.iloc[:train_end].copy()
+y_train = y.iloc[:train_end].copy()
+
+X_val = X.iloc[train_end:val_end].copy()
+y_val = y.iloc[train_end:val_end].copy()
+
+X_test = X.iloc[val_end:].copy()
+y_test = y.iloc[val_end:].copy()
+
+print(f"Tailles -> train: {X_train.shape}, val: {X_val.shape}, test: {X_test.shape}")
+
+# -----------------------
+# Imputation (median) - fit uniquement sur train
+# -----------------------
+imputer = SimpleImputer(strategy='median')
+imputer.fit(X_train[num_cols])
+
+X_train_imp = pd.DataFrame(imputer.transform(X_train[num_cols]), index=X_train.index, columns=num_cols)
+X_val_imp   = pd.DataFrame(imputer.transform(X_val[num_cols]), index=X_val.index, columns=num_cols)
+X_test_imp  = pd.DataFrame(imputer.transform(X_test[num_cols]), index=X_test.index, columns=num_cols)
+
+# Save imputer for reproducibility / production
+joblib.dump(imputer, IMPUTER_OUTPATH)
+print(f"Imputer sauvegardé -> {IMPUTER_OUTPATH}")
+
+# -----------------------
+# GridSearchCV (TimeSeriesSplit) pour chercher les meilleurs hyperparams
+# -----------------------
+print("\nLancement GridSearchCV (TimeSeriesSplit) sur XGBoost...")
+
+xgb = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=RANDOM_STATE, n_jobs=-1)
+
+tscv = TimeSeriesSplit(n_splits=TS_SPLITS)
+
+# GridSearchCV sur les features imputées (pas de scaling nécessaire pour XGBoost)
+gscv = GridSearchCV(
+    estimator=xgb,
+    param_grid=XGB_PARAM_GRID,
+    scoring=GRID_SCORING,
+    cv=tscv,
+    n_jobs=-1,
+    verbose=1,
+    refit=True
+)
+
+gscv.fit(X_train_imp, y_train)
+print("Meilleurs paramètres trouvés (GridSearchCV):")
+print(gscv.best_params_)
+print(f"Best CV {GRID_SCORING}: {gscv.best_score_:.4f}")
+
+# -----------------------
+# Ré-entraînement final avec early stopping sur l'échantillon de validation
+# -----------------------
+best_params = gscv.best_params_.copy()
+
+# Conserver paramètres choisis et activer early stopping via eval_set
+xgb_final = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=RANDOM_STATE,
+                          n_jobs=-1, **best_params)
+
+print("\nRé-entrainement final avec early stopping sur validation (eval_set)...")
+xgb_final.fit(
+    X_train_imp, y_train,
+    eval_set=[(X_val_imp, y_val)],
+    early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+    verbose=False
+)
+
+# Sauvegarde modèle
+joblib.dump(xgb_final, MODEL_OUTPATH)
+print(f"Modèle final sauvegardé -> {MODEL_OUTPATH}")
+
+# -----------------------
+# Prédiction out-of-sample (test) + évaluation
+# -----------------------
+print("\nÉvaluation out-of-sample (test)...")
+probs_test = xgb_final.predict_proba(X_test_imp)[:, 1]
+auc = roc_auc_score(y_test, probs_test)
+gini = 2*auc - 1
+fpr, tpr, thresholds = roc_curve(y_test, probs_test)
+
+# Seuil optimal - Youden (TPR - FPR maximisé)
+youden_idx = np.argmax(tpr - fpr)
+opt_threshold_youden = thresholds[youden_idx]
+
+# Seuil optimisant F1 (pour info)
+f1_scores = [f1_score(y_test, (probs_test >= t).astype(int), zero_division=0) for t in thresholds]
+opt_threshold_f1 = thresholds[np.argmax(f1_scores)]
+
+# Choix du seuil final : tu peux choisir Youden ou F1 ; ici on utilise Youden tout en reportant F1-opt
+threshold = opt_threshold_youden
+
+preds = (probs_test >= threshold).astype(int)
+tn, fp, fn, tp = confusion_matrix(y_test, preds).ravel()
+
+precision = precision_score(y_test, preds, zero_division=0)
+recall = recall_score(y_test, preds, zero_division=0)            # sensitivity
+accuracy = accuracy_score(y_test, preds)
+f1 = f1_score(y_test, preds, zero_division=0)
+specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+bal_acc = balanced_accuracy_score(y_test, preds)
+
+# -----------------------
+# Affichage résultats (out-of-sample uniquement)
+# -----------------------
+print(f"\nRésultats (test) - XGBoost")
+print(f"AUC (ROC): {auc:.4f}")
+print(f"Gini: {gini:.4f}")
+print(f"Seuil Youden: {opt_threshold_youden:.4f} | Seuil F1-opt: {opt_threshold_f1:.4f}")
+print("Matrice de confusion (tn, fp, fn, tp):", (int(tn), int(fp), int(fn), int(tp)))
+print(f"Precision: {precision:.4f}")
+print(f"Recall (Sensitivity): {recall:.4f}")
+print(f"Specificity: {specificity:.4f}")
+print(f"F1: {f1:.4f}")
+print(f"Accuracy: {accuracy:.4f}")
+print(f"Balanced Accuracy: {bal_acc:.4f}")
+
+# -----------------------
+# Tracer ROC (test)
+# -----------------------
+plt.figure(figsize=(7,6))
+plt.plot(fpr, tpr, label=f"XGBoost (AUC={auc:.3f})")
+plt.plot([0,1],[0,1], linestyle='--', alpha=0.6)
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC - Out-of-sample (test)")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# -----------------------
+# Tracer Matrice de confusion (test)
+# -----------------------
+cm = np.array([[tn, fp],[fn, tp]])
+plt.figure(figsize=(4,3))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.title(f"Matrice de confusion (test) - seuil={threshold:.4f}")
+plt.ylabel("Vraie classe")
+plt.xlabel("Classe prédite")
+plt.show()
+
+# -----------------------
+# Importance des features (optionnel, utile pour interprétation)
+# -----------------------
+try:
+    imp = pd.Series(xgb_final.feature_importances_, index=num_cols).sort_values(ascending=False)
+    print("\nTop 10 features par importance (XGBoost):")
+    print(imp.head(10))
+    plt.figure(figsize=(6,4))
+    imp.head(15).plot(kind='bar')
+    plt.title("Feature importances (XGBoost)")
+    plt.tight_layout()
+    plt.show()
+except Exception:
+    pass
+
+# -----------------------
+# Résumé final en dictionary (pratique pour reporting programmatique)
+# -----------------------
+report = {
+    'auc': float(auc),
+    'gini': float(gini),
+    'threshold_youden': float(opt_threshold_youden),
+    'threshold_f1': float(opt_threshold_f1),
+    'threshold_used': float(threshold),
+    'confusion': {'tn': int(tn), 'fp': int(fp), 'fn': int(fn), 'tp': int(tp)},
+    'precision': float(precision),
+    'recall': float(recall),
+    'specificity': float(specificity),
+    'f1': float(f1),
+    'accuracy': float(accuracy),
+    'balanced_accuracy': float(bal_acc),
+    'best_params': best_params,
+    'trained_at': datetime.utcnow().isoformat() + 'Z'
+}
+
+# Enregistrer le reporting si souhaité
+pd.Series(report).to_json("xgb_report_test.json")
+print("\nReport JSON sauvegardé -> xgb_report_test.json")
+print("\nTerminé. Seuls les résultats out-of-sample (test) ont été affichés.")
+"""
+
