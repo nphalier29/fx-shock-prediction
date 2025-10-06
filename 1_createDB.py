@@ -264,17 +264,28 @@ IMPUTER_OUTPATH = "imputer.joblib"
 # Décalage de la variable cible
 # ===============================
 
-SHIFT_DAYS = 14 
+# ===============================
+# Décalage de la variable cible pour prédire le choc à 2 semaines
+# ===============================
 
-# Décale la cible vers le passé pour que X_t corresponde à y_{t+14}
-df_final['target_future'] = df['target'].shift(-SHIFT_DAYS)
+SHIFT_DAYS = 10  # environ 2 semaines ouvrées
 
-# Supprime les lignes où la cible future est manquante (en fin de série)
-df_final = df_final.dropna(subset=['target_future'])
+# On crée une copie pour éviter les erreurs d’alignement
+df_final = df_extended.copy()
 
-# On définit la nouvelle cible
-y = df_final['target_future']
-X = df_final.drop(columns=['target_future', 'shock'])  # on garde les features d'aujourd'hui
+# Décaler la target vers le passé : les features du jour t servent à prédire le choc à t+10
+df_final["target_future"] = df_final["target"].shift(-SHIFT_DAYS)
+
+# Supprimer les lignes où la cible future est manquante (en fin de série)
+df_final = df_final.dropna(subset=["target_future"])
+
+# Définir X (features actuelles) et y (choc futur)
+X = df_final.drop(columns=["target", "target_future"])  # on garde uniquement les variables explicatives
+y = df_final["target_future"].astype(int)
+
+print("✅ Variable cible correctement décalée de 2 semaines.")
+print(f"Shape finale : {X.shape}, target positive rate = {y.mean():.3f}")
+
 
 
 # -----------------------
