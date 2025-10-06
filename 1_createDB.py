@@ -179,6 +179,8 @@ print(df_extended.tail(60))
 infl_eur = taceconomics.getdata(f"EUROSTAT/EI_CPHI_M_CP-HI00_NSA_HICP2015/EUZ?collapse=M&transform=growth_yoy&start_date={start_date}")
 infl_us = taceconomics.getdata(f"FRED/CPIAUCSL/USA?collapse=M&transform=growth_yoy&start_date={start_date}")
 
+df_extended['infl_eur'] = df['infl_eur'].ffill()
+df_extended['infl_us'] = df['infl_us'].ffill()
 # infl_eur = taceconomics.getdata(f"IFS/PCPIHA_IX_M/EUZ?start_date={start_date}")
 # infl_us = taceconomics.getdata(f"IFS/PCPI_IX_M/USA?start_date={start_date}")
 
@@ -188,6 +190,9 @@ df_final = df_extended.join(infl_eur).join(infl_us)
 
 ti_eur = taceconomics.getdata(f"ECB/FM_D_EUR_4F_KR_DFR_LEV/EUZ?collapse=M&collapse_mode=end_of_period&start_date={start_date}")
 ti_us = taceconomics.getdata(f"DS/USPRATE./WLD?collapse=M&start_date={start_date}")
+df_final['ti_eur'] = df['ti_eur'].ffill()
+df_final['ti_us'] = df['ti_us'].ffill()
+
 
 # ti_eur = taceconomics.getdata(f"IFS/FPOLM_PA_M/EUZ?start_date={start_date}")
 # ti_us = taceconomics.getdata(f"IFS/FPOLM_PA_M/USA?start_date={start_date}")
