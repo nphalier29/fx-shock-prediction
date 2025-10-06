@@ -170,12 +170,12 @@ kmeans = KMeans(n_clusters=3, random_state=42)  # exemple avec 3 clusters
 df_extended['cluster_kmeans'] = kmeans.fit_predict(X_pca)
 
 
-print(df_extended.tail(60))
+print(df_extended.head(60))
 
 #----Variables macro----
 
 # Inflation
-
+""""
 infl_eur = taceconomics.getdata(f"EUROSTAT/EI_CPHI_M_CP-HI00_NSA_HICP2015/EUZ?collapse=M&transform=growth_yoy&start_date={start_date}")
 infl_us = taceconomics.getdata(f"FRED/CPIAUCSL/USA?collapse=M&transform=growth_yoy&start_date={start_date}")
 
@@ -198,10 +198,10 @@ df_final['ti_us'] = df['ti_us'].ffill()
 # ti_us = taceconomics.getdata(f"IFS/FPOLM_PA_M/USA?start_date={start_date}")
 
 df_final = df_final.join(ti_eur).join(ti_us)
+""""
 
 
-
-print(df_final.tail(40))
+#print(df_final.tail(40))
 
 
 # MODELISATION
@@ -213,7 +213,7 @@ Sorties :
 - AUC, Gini, courbe ROC (test),
 - seuil optimal (Youden) et matrice de confusion + métriques associées,
 - modèle final enregistré (joblib).
-
+"""
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -260,24 +260,32 @@ EARLY_STOPPING_ROUNDS = 50
 MODEL_OUTPATH = "xgb_final_model.joblib"
 IMPUTER_OUTPATH = "imputer.joblib"
 
+# ===============================
+# Décalage de la variable cible
+# ===============================
+
+SHIFT_DAYS = 14 
+
+# Décale la cible vers le passé pour que X_t corresponde à y_{t+14}
+df_final['target_future'] = df['target'].shift(-SHIFT_DAYS)
+
+# Supprime les lignes où la cible future est manquante (en fin de série)
+df_final = df_final.dropna(subset=['target_future'])
+
+# On définit la nouvelle cible
+y = df_final['target_future']
+X = df_final.drop(columns=['target_future', 'shock'])  # on garde les features d'aujourd'hui
+
+
 # -----------------------
 # Chargement & checks
 # -----------------------
 print("Chargement des données...")
 
-df = df_final.sort_values(DATE_COL).reset_index(drop=True)
-
-if DATE_COL not in df.columns:
-    raise ValueError(f"Colonne date '{DATE_COL}' introuvable.")
-if TARGET_COL not in df.columns:
-    raise ValueError(f"Colonne cible '{TARGET_COL}' introuvable.")
-
-# index temporel
-df.set_index(DATE_COL, inplace=True)
 
 # Features & target
-X = df.drop(columns=[TARGET_COL])
-y = df[TARGET_COL].astype(int)
+X = df.drop(columns=["target_cible", "target"])  # enlever colonnes non-utiles
+y = df["target_cible"].astype(int)
 
 # On suppose tout numérique — sinon adapter types/catégoriques
 num_cols = X.columns.tolist()
