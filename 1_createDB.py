@@ -326,3 +326,18 @@ print(f"Shape: {df_long.shape}")
 
 # --- Export sur base SQL via conteneur Docker ---
 
+import pandas as pd
+from sqlalchemy import create_engine
+
+# Paramètres de connexion
+db_user = 'postgres'
+db_password = 'mysecretpassword'
+db_host = 'localhost'  
+db_port = 5432
+db_name = 'postgres'    
+
+# Création de l'engine SQLAlchemy
+engine = create_engine(f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}')
+
+# Export vers SQL
+df_long.to_sql('ma_table', engine, if_exists='replace', index=False)

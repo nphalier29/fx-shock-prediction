@@ -49,6 +49,7 @@ scikit-learn==1.7.2
 scipy==1.16.2
 seaborn==0.13.2
 six==1.17.0
+SQLAlchemy==2.0.43
 stack-data==0.6.3
 taceconomics @ git+https://github.com/taceconomics/taceconomics-python.git@7159ffd7ae31b98577a33e1e37b0b3e79189594f
 threadpoolctl==3.6.0

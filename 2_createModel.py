@@ -11,6 +11,26 @@ warnings.filterwarnings("ignore")
 
 # --- Charger les données préparées ---
 
+from sqlalchemy import create_engine
+import scipy as sp
+
+# Paramètres de connexion
+db_user = 'postgres'
+db_password = 'mysecretpassword'
+db_host = 'localhost' 
+db_port = 5432
+db_name = 'postgres'   
+
+# Création de l'engine SQLAlchemy
+engine = create_engine(f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}')
+
+# Lire la table SQL dans un DataFrame
+df_from_sql = pd.read_sql('SELECT * FROM ma_table', engine)
+
+# Afficher les 5 premières lignes
+
+df_from_sql = df_from_sql.dropna(how='all')  # Supprimer les lignes entièrement vides
+df_from_sql.head()
 
 # --- Config ---
 TRAIN_SIZE = 0.80  # 80% train, 20% test
