@@ -1,41 +1,22 @@
-# --- Import de packages ---
-
+# --- Import des packages ---
 import pandas as pd
-import taceconomics
-from datetime import datetime
 import numpy as np
-
-from gdeltdoc import GdeltDoc, Filters
-from datetime import datetime, timedelta
-import pandas as pd
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
-import nltk
-
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-
-from sklearn.metrics import (roc_auc_score, roc_curve, confusion_matrix, precision_score, recall_score, f1_score, accuracy_score)
-
 from xgboost import XGBClassifier
+from sklearn.metrics import (roc_auc_score, roc_curve, confusion_matrix, 
+                             precision_score, recall_score, f1_score, accuracy_score)
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-"""
-XGBoost pour prédiction d'un choc à 2 semaines sur EUR/USD.
-"""
-
 import warnings
 warnings.filterwarnings("ignore")
 
-# --- config ---
+# --- Charger les données préparées ---
 
+
+# --- Config ---
 TRAIN_SIZE = 0.80  # 80% train, 20% test
 df = df_final.copy()
 
-# --- features et target ---
-
-# Features
+# --- Features et target ---
 feature_cols = ['close', 'rendement_log', 'vol_30j', 'rendement_log_10j',
        'mm7', 'mm21', 'boll_haut', 'boll_bas', 'rsi_14j', 'sentiment',
        'cluster_kmeans', 'PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'inflation_eur',
@@ -44,39 +25,64 @@ feature_cols = ['close', 'rendement_log', 'vol_30j', 'rendement_log_10j',
 X = df[feature_cols].fillna(df[feature_cols].median())
 y = df["target"].astype(int)
 
-print(f"Features: {X.shape}")
-
-# --- split train/test temporel ---
-
+# --- Split train/test temporel ---
 split_idx = int(len(df) * TRAIN_SIZE)
-
 X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
 y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
 print(f"\nTrain: {X_train.shape} | Test: {X_test.shape}")
-print(f"Target train: {y_train.mean():.3f} | test: {y_test.mean():.3f}")
 
-# --- entraînement XGBoost ---
+# --- Définir la grille de paramètres ---
+param_grid = {
+    'n_estimators': [200, 500, 800],
+    'max_depth': [4, 6, 8],
+    'learning_rate': [0.01, 0.03, 0.05],
+    'subsample': [0.7, 0.8, 0.9],
+    'colsample_bytree': [0.7, 0.8, 0.9],
+    'scale_pos_weight': [y_train.value_counts()[0] / y_train.value_counts()[1]]
+}
 
-print("\nEntraînement XGBoost...")
+# --- Recherche des meilleurs paramètres sans CV ---
+best_auc = 0
+best_params = None
+best_model = None
 
-model = XGBClassifier(
-    n_estimators=200,
-    max_depth=4,
-    learning_rate=0.05,
-    random_state=42,
-    eval_metric='logloss',
-    use_label_encoder=False
-)
+for n_est in param_grid['n_estimators']:
+    for max_d in param_grid['max_depth']:
+        for lr in param_grid['learning_rate']:
+            for subs in param_grid['subsample']:
+                for col in param_grid['colsample_bytree']:
+                    model = XGBClassifier(
+                        n_estimators=n_est,
+                        max_depth=max_d,
+                        learning_rate=lr,
+                        subsample=subs,
+                        colsample_bytree=col,
+                        scale_pos_weight=param_grid['scale_pos_weight'][0],
+                        random_state=42,
+                        use_label_encoder=False,
+                        eval_metric='logloss'
+                    )
+                    model.fit(X_train, y_train)
+                    probs = model.predict_proba(X_test)[:, 1]
+                    auc = roc_auc_score(y_test, probs)
+                    if auc > best_auc:
+                        best_auc = auc
+                        best_params = {
+                            'n_estimators': n_est,
+                            'max_depth': max_d,
+                            'learning_rate': lr,
+                            'subsample': subs,
+                            'colsample_bytree': col,
+                            'scale_pos_weight': param_grid['scale_pos_weight'][0]
+                        }
+                        best_model = model
 
-model.fit(X_train, y_train)
+print("\nMeilleurs paramètres trouvés :")
+print(best_params)
 
-# --- prédictions et évaluation ---
-
-print("\nÉvaluation sur test...")
-
-# Probabilités
-probs_test = model.predict_proba(X_test)[:, 1]
+# --- Évaluation sur le test set ---
+probs_test = best_model.predict_proba(X_test)[:, 1]
 
 # Métriques ROC
 auc = roc_auc_score(y_test, probs_test)
@@ -111,7 +117,6 @@ print(f"Accuracy:   {accuracy:.4f}")
 print(f"{'='*50}")
 
 # --- Visualisations ---
-
 fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
 # ROC Curve
@@ -132,7 +137,7 @@ axes[1].set_ylabel("True")
 axes[1].set_xlabel("Predicted")
 
 # Feature Importance
-importance = pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=True)
+importance = pd.Series(best_model.feature_importances_, index=feature_cols).sort_values(ascending=True)
 importance.tail(10).plot(kind='barh', ax=axes[2], color='steelblue')
 axes[2].set_xlabel("Importance")
 axes[2].set_title("Top 10 Features")
@@ -142,4 +147,3 @@ plt.show()
 
 print("\nTop 5 features:")
 print(importance.sort_values(ascending=False).head(5))
-

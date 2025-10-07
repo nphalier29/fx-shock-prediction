@@ -306,9 +306,23 @@ if df_macro.index[-1] < pd.to_datetime(end_date):
 
 df_final = pd.concat([df_extended, df_macro], axis=1)
 df_final = df_final.ffill()
-desc = df_final.describe()
 
-print(df_final.tail(10))
+# print(df_final.tail(10))
 # print(df_final.columns)
 # print(df_final.iloc[0])
+
+#--- Transformation au format long ---
+
+df_long = df_final.stack().reset_index()
+
+# Renommer les colonnes
+df_long.columns = ['date', 'indicateur', 'value']
+
+# Trier par date et indicateur
+df_long = df_long.sort_values(['date', 'indicateur']).reset_index(drop=True)
+
+print(df_long.head())
+print(f"Shape: {df_long.shape}")
+
+# --- Export sur base SQL via conteneur Docker ---
 
