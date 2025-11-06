@@ -23,7 +23,7 @@ import seaborn as sns
 
 # --- API Key et dates ---
 
-taceconomics.api_key = "sk_o24BhJRqVpIvxVSXX3yiKRGgpDEejmyJ8pfLFX2q22s"  
+taceconomics.api_key = ""  # Insérer votre clé API ici
 start_date = '2020-01-01'
 end_date = datetime.today().strftime("%Y-%m-%d")
 
